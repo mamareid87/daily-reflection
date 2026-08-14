@@ -143,6 +143,28 @@
   textarea::placeholder{color:var(--taupe);}
   input[type=number]{max-width:110px;text-align:center;font-size:1.1rem;}
 
+  /* ---------- unanswered state ---------- */
+  .q.missing{
+    background:var(--mauve-light);
+    border-radius:var(--radius);
+    padding:.9rem .9rem .35rem;
+    margin-left:-.9rem;margin-right:-.9rem;
+    animation:nudge .4s ease;
+  }
+  .q.missing .qlabel,.q.missing > label{color:var(--mauve-dark);font-weight:500;}
+  .q.missing textarea,.q.missing input[type=number]{border-color:var(--mauve-dark);}
+  .q.missing .choices label{border-color:var(--mauve);}
+  .flag-note{
+    display:none;font-size:.75rem;color:var(--mauve-dark);
+    margin-top:.55rem;letter-spacing:.02em;
+  }
+  .q.missing .flag-note{display:block;}
+  @keyframes nudge{
+    0%,100%{transform:translateX(0);}
+    25%{transform:translateX(-4px);}
+    75%{transform:translateX(4px);}
+  }
+
   /* ---------- conditional follow ups ---------- */
   .followup{
     display:none;margin-top:.95rem;padding-left:.95rem;
@@ -186,6 +208,7 @@
   button:disabled{background:var(--taupe);cursor:not-allowed;}
   .status{
     margin-top:1rem;font-size:.85rem;min-height:1.4rem;color:var(--gray);
+    word-break:break-word;max-width:420px;margin-inline:auto;
   }
   .status.err{color:var(--mauve-dark);}
 
@@ -228,7 +251,7 @@
     <div class="eyebrow">Nightly Check In</div>
     <h1>Daily <em>Self</em><br>Reflection</h1>
     <div class="today" id="today"></div>
-    <p class="intro">Answer honestly. This is for you first. Nobody is grading you, we are just looking for the pattern.</p>
+    <p class="intro">Answer every one honestly. This is for you first. Nobody is grading you, we are just looking for the pattern.</p>
   </header>
 
   <main>
@@ -330,7 +353,11 @@
         <div class="q">
           <label for="jobs">Job applications I sent today</label>
           <span class="hint">Goal is 7 this week.</span>
-          <input type="number" id="jobs" name="jobs_applied" min="0" max="20" step="1" value="0" inputmode="numeric">
+          <input type="number" id="jobs" name="jobs_applied" min="0" max="20" step="1" inputmode="numeric" placeholder="0">
+          <div class="followup" id="jobs-zero">
+            <label for="jobs_why">What got in the way of applying today</label>
+            <textarea id="jobs_why" name="jobs_why" placeholder="Be honest. No wrong answer here, this is just for reflection."></textarea>
+          </div>
         </div>
 
         <div class="q">
@@ -407,8 +434,8 @@
 </div>
 
 <script>
-  // ---- CONFIG: paste your Cloudflare Worker URL between the quotes ----
-  const WORKER_URL = "https://daily-reflection.brenda-reid1987.workers.dev/";
+  // ---- Brenda's Cloudflare Worker. Already set, no need to touch this. ----
+  const WORKER_URL = "https://daily-reflection.brenda-reid1987.workers.dev";
 
   // date label
   const now = new Date();
@@ -453,6 +480,9 @@
       box.classList.toggle('show', on);
       if(on) box.querySelector('label').textContent = picked.dataset.explain;
     });
+    const jobs = document.getElementById('jobs');
+    document.getElementById('jobs-zero')
+      .classList.toggle('show', jobs.value.trim() === '0');
     document.querySelectorAll('.followup[data-when]').forEach(fu=>{
       const [name,val] = fu.dataset.when.split('=');
       const picked = document.querySelector(`[name="${name}"]:checked`);
@@ -460,6 +490,7 @@
     });
   }
   document.addEventListener('change', syncFollowups);
+  document.addEventListener('input', syncFollowups);
   syncFollowups();
   function paint(name){
     const dot=spine.querySelector(`[data-for="${name}"]`);
@@ -473,22 +504,81 @@
   }
   document.getElementById('form').addEventListener('input', e=>{ if(e.target.name) paint(e.target.name); });
 
+  // ---- every question needs an answer ----
+  function isLive(el){
+    const fu = el.closest('.followup');
+    return !fu || fu.classList.contains('show');
+  }
+
+  function firstUnanswered(){
+    for(const q of document.querySelectorAll('.q')){
+      const radios = q.querySelectorAll('input[type=radio]');
+      if(radios.length){
+        const names = [...new Set([...radios].map(r=>r.name))];
+        for(const n of names){
+          if(!q.querySelector(`[name="${n}"]:checked`)) return q;
+        }
+      }
+      for(const f of q.querySelectorAll('textarea, input[type=number]')){
+        if(!isLive(f)) continue;
+        if(!f.value.trim()) return q;
+      }
+    }
+    return null;
+  }
+
+  // add the little prompt line to every question once
+  document.querySelectorAll('.q').forEach(q=>{
+    const note = document.createElement('div');
+    note.className = 'flag-note';
+    note.textContent = 'This one still needs an answer.';
+    q.appendChild(note);
+  });
+
+  // clear the highlight as soon as she answers
+  document.getElementById('form').addEventListener('input', e=>{
+    const q = e.target.closest('.q');
+    if(q) q.classList.remove('missing');
+  });
+
   // submit
   document.getElementById('form').addEventListener('submit', async e=>{
     e.preventDefault();
     const btn=document.getElementById('btn'), status=document.getElementById('status');
+
+    document.querySelectorAll('.q.missing').forEach(q=>q.classList.remove('missing'));
+    const gap = firstUnanswered();
+    if(gap){
+      gap.classList.add('missing');
+      gap.scrollIntoView({behavior:'smooth', block:'center'});
+      const focusable = [...gap.querySelectorAll('textarea, input[type=number]')].find(isLive);
+      if(focusable) setTimeout(()=>focusable.focus({preventScroll:true}), 400);
+      status.className='status err';
+      status.textContent='Almost there. A few still need an answer.';
+      return;
+    }
+
     const data=Object.fromEntries(new FormData(e.target).entries());
     data.submitted_at = new Date().toISOString();
     data.local_time = now.toLocaleString();
 
     btn.disabled=true; btn.textContent='Sending...'; status.className='status'; status.textContent='';
+
+    if(!WORKER_URL || WORKER_URL.indexOf('PASTE_YOUR') === 0){
+      btn.disabled=false; btn.textContent='Try sending again';
+      status.className='status err';
+      status.textContent='Setup: WORKER_URL is still the placeholder in index.html.';
+      return;
+    }
+
     try{
       const res = await fetch(WORKER_URL,{
         method:'POST',
         headers:{'Content-Type':'application/json'},
         body:JSON.stringify(data)
       });
-      if(!res.ok) throw new Error('Server said no ('+res.status+')');
+      const raw = await res.text();
+      if(!res.ok) throw new Error(`${res.status} ${raw.slice(0,240)}`);
       document.getElementById('formview').style.display='none';
       document.getElementById('spine').style.display='none';
       document.getElementById('done').classList.add('show');
@@ -496,7 +586,10 @@
     }catch(err){
       btn.disabled=false; btn.textContent='Try sending again';
       status.className='status err';
-      status.textContent="That didn't go through. Check your connection and tap again.";
+      status.textContent = String(err.message || err).startsWith('Failed to fetch')
+        ? "Couldn't reach the Worker at all. Check the WORKER_URL, it may be misspelled."
+        : 'Server said: ' + (err.message || err);
+      console.log('Reflection submit error:', err);
     }
   });
 </script>
